@@ -10,7 +10,7 @@ FINMIND_CACHE_DIR = os.environ.get(
     str(Path(__file__).resolve().parent.parent / ".cache" / "finmind"),
 )
 # 各頻率快取新鮮天數：超過則增量更新
-CACHE_FRESH_DAYS = {"daily": 1, "monthly": 20, "weekly": 5, "static": 7}
+CACHE_FRESH_DAYS = {"daily": 1, "monthly": 20, "weekly": 5, "quarterly": 60, "static": 7}
 
 # ── 限流（FinMind 免費版約 600 req/hr）──
 FINMIND_MIN_INTERVAL = 0.12       # 相鄰請求最小間隔秒

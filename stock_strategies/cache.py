@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -111,6 +112,8 @@ def _rate_limited_get(params: dict, timeout: int, max_retries: int) -> dict:
 
 
 def _freq_of(dataset: str) -> str:
+    if dataset in ("TaiwanStockFinancialStatements", "TaiwanStockBalanceSheet"):
+        return "quarterly"          # 季報才更新，max_date 是季末日，不可當每日判過期
     if dataset == "TaiwanStockMonthRevenue":
         return "monthly"
     if dataset == "TaiwanStockShareholding":
@@ -146,7 +149,8 @@ def _write_cache(dataset: str, data_id: str, df: pd.DataFrame) -> None:
     _meta_path(dataset, data_id).write_text(json.dumps(meta))
 
 
-def _is_fresh(dataset: str, data_id: str, fresh_days: int | None) -> bool:
+def _is_fresh(dataset: str, data_id: str, fresh_days: int | None,
+              today: pd.Timestamp | None = None) -> bool:
     mp = _meta_path(dataset, data_id)
     if not mp.exists():
         return False
@@ -158,7 +162,11 @@ def _is_fresh(dataset: str, data_id: str, fresh_days: int | None) -> bool:
     if pd.isna(max_date):
         return False
     days = fresh_days if fresh_days is not None else CACHE_FRESH_DAYS[_freq_of(dataset)]
-    return (pd.Timestamp.now().normalize() - max_date.normalize()).days <= days
+    today = (today or pd.Timestamp.now()).normalize()
+    # 用「工作日」數判斷新鮮度：週五抓的快取週一檢查＝1 個交易日(<=daily門檻1)，視為新鮮，
+    # 不會因週末把整批資料判過期而觸發大量增量抓取（省 FinMind 額度）。
+    gap = int(np.busday_count(max_date.normalize().date(), today.date()))
+    return gap <= days
 
 
 def _api_to_df(payload: dict) -> pd.DataFrame:
@@ -208,9 +216,9 @@ def fetch_finmind_cached(
         fresh = _api_to_df(payload)
         if cached is not None and len(cached):
             df = pd.concat([cached, fresh], ignore_index=True)
-            if "date" in df.columns:
-                df = df.drop_duplicates(subset=[c for c in df.columns]).sort_values("date")
-                df = df.drop_duplicates(subset=["date"] + (["data_id"] if "data_id" in df else []), keep="last")
+            # 全欄位去重：移除增量 overlap 的完全重複列。不可用 subset=["date"] 去重——
+            # long-format（財報多 type、法人多 name）同一 date 有多列，會被誤砍成一列（根因A）。
+            df = df.drop_duplicates()
         else:
             df = fresh
         df = df.reset_index(drop=True)
