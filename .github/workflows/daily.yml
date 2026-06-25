@@ -1,0 +1,33 @@
+name: V3 Daily Signal
+
+on:
+  schedule:
+    # 台灣時間 14:30 = UTC 06:30 (台股收盤後)
+    - cron: '30 6 * * 1-5'
+  workflow_dispatch:  # 允許手動觸發測試
+
+jobs:
+  run-signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: uv sync
+
+      - name: Run signal engine
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+        run: uv run python main.py
