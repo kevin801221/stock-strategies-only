@@ -27,7 +27,7 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
         fund = get_fundamental(stock_id)
         eps_vals = list(fund["eps"].values())
         roe_vals = list(fund["roe"].values())
-        fund_pass = (
+        fund_pass = bool(
             len(eps_vals) >= 2
             and len(roe_vals) >= 2
             and min(eps_vals) > params["eps_threshold"]
