@@ -24,12 +24,15 @@ MIN_PRICE_ROWS = 60               # 少於此列數視為新股／資料不足
 FUTURES_ID = "TX"
 
 CONFIG = {
-    "eps_threshold": 5.0,
-    "roe_threshold": 15.0,
-    "backtest_years": 3,
-    "hold_days": 20,
-    "target_return": 0.10,
-    "stop_loss": 0.08,
+   # ── 基本面與大盤條件 ──
+    "roe_threshold": 10.0,              # 條件 ④：ROE > 10%
+    "roe_years": 5,                     # 條件 ④：連續五年
+    "market_above_ma20": True,          # 條件 ④：大盤在月線（20日線）上才成立
+
+    # ── 技術面與籌碼面條件 ──
+    "ma20_trending_up": True,           # 條件 ①：20日均線向上
+    "margin_increase_top_rank": 100,    # 條件 ②：融資增加前 100 名
+    "fund_holding_min_count": 100,      # 條件 ③：基金持有 > 100 檔
     "min_tech_score_for_signal": 60,
     "min_total_score_for_buy": 65,
     # 夜盤開盤方向分類門檻（漲跌幅 %）
