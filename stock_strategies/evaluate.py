@@ -52,8 +52,8 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
 
         fund_score = 100 if fund_pass else 40
         tech_score = max(0, min(100, ts["score"] + vp["bonus"]))
-        winrate = bt.get("winrate") or 0.5
-        bt_score = winrate * 100
+        winrate = bt.get("winrate")
+        bt_score = (winrate if winrate is not None else 0.5) * 100
 
         wf = params["weight_fundamental"]
         wt = params["weight_technical"]
@@ -91,7 +91,7 @@ def evaluate(stock_id: str, name: str, strategy: dict | None = None) -> Optional
             result["risk_notes"].append(f"回測樣本僅 {bt.get('samples', 0)} 次，統計弱")
         if not fund_pass:
             result["risk_notes"].append("基本面未過門檻")
-        if winrate < 0.5:
+        if winrate is not None and winrate < 0.5:
             result["risk_notes"].append(f"歷史勝率 {winrate*100:.0f}% 低於五成")
         if pd.notna(latest.get("bb_upper")) and latest["close"] > latest["bb_upper"]:
             result["risk_notes"].append("已突破布林上軌，追高風險")

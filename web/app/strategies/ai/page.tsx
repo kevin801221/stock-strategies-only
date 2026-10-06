@@ -2,7 +2,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, Strategy } from "@/lib/api";
+import { api, Strategy, errorMessage } from "@/lib/api";
+import { ErrorCard } from "@/components/Feedback";
 import StrategyForm from "@/components/StrategyForm";
 
 const EXAMPLES = [
@@ -24,12 +25,11 @@ export default function AIStrategyPage() {
     if (!prompt.trim()) return;
     setLoading(true);
     setError(null);
-    setDraft(null);
     try {
       const s = await api.generateAI(prompt.trim(), name.trim() || undefined);
       setDraft(s);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -40,7 +40,7 @@ export default function AIStrategyPage() {
       <Link href="/strategies" className="text-sm text-muted hover:text-text">← 回策略庫</Link>
 
       <div>
-        <h1 className="text-2xl font-semibold">✨ AI 生策略</h1>
+        <h1 className="text-2xl font-semibold">AI 策略助手</h1>
         <p className="text-sm text-muted mt-1">
           用一段自然語言描述你想要的選股風格，Gemini 會自動生出對應的參數，你可以再微調後存進策略庫。
         </p>
@@ -48,8 +48,8 @@ export default function AIStrategyPage() {
 
       <div className="card space-y-4">
         <div>
-          <label className="label">想要的策略風格</label>
-          <textarea
+          <label htmlFor="ai-prompt" className="label">想要的策略風格</label>
+          <textarea id="ai-prompt" maxLength={8000} disabled={loading}
             className="input min-h-[120px]"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -57,25 +57,25 @@ export default function AIStrategyPage() {
           />
         </div>
         <div>
-          <label className="label">策略名稱（可選）</label>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)}
+          <label htmlFor="ai-name" className="label">策略名稱（可選）</label>
+          <input id="ai-name" maxLength={120} disabled={loading} className="input" value={name} onChange={(e) => setName(e.target.value)}
             placeholder="留空 AI 會自己取" />
         </div>
         <div className="flex flex-wrap gap-2">
           {EXAMPLES.map((e, i) => (
-            <button key={i} onClick={() => setPrompt(e)}
+            <button key={i} disabled={loading} onClick={() => setPrompt(e)}
               className="text-xs text-muted hover:text-text border border-line rounded-full px-3 py-1.5 hover:bg-panel2">
-              範例 {i + 1}
+              {["短線動能", "長期價值", "穩健存股", "保守風控"][i]}
             </button>
           ))}
         </div>
         <button onClick={generate} disabled={loading || !prompt.trim()} className="btn-primary">
-          {loading ? "生成中…" : "✨ 用 Gemini 生策略"}
+          {loading ? "正在設計策略，請稍候…" : draft ? "重新生成策略" : "產生策略草稿"}
         </button>
-        {error && <div className="text-sm text-err">錯誤：{error}</div>}
+        {error && <ErrorCard message={error} />}
       </div>
 
-      {draft && (
+      {draft && !loading && (
         <div className="space-y-4">
           <div className="card border-purple-500/30">
             <div className="flex items-center gap-2 mb-2">
@@ -88,7 +88,8 @@ export default function AIStrategyPage() {
             </p>
           </div>
           <StrategyForm
-            initial={draft}
+            key={draft.updated_at}
+            initial={{ ...draft, id: undefined }}
             saveLabel="儲存到策略庫"
             onSaved={(s) => router.push(`/strategies/${s.id}`)}
           />

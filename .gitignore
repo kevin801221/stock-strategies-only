@@ -21,3 +21,9 @@ speech-to-text-*.json
 
 # FinMind 本地快取（parquet）
 .cache/
+
+# Frontend dependencies and generated output
+web/node_modules/
+web/.next/
+web/tsconfig.tsbuildinfo
+web/.env*.local

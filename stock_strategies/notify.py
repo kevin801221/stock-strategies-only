@@ -35,7 +35,7 @@ def _format_stock_detail(s: dict, show_trend: bool = True) -> list[str]:
     c = s.get("components", {})
     t = s.get("trend", {})
     lines = []
-    wr = f"{c['backtest_winrate']*100:.0f}%" if c.get("backtest_winrate") else "N/A"
+    wr = f"{c['backtest_winrate']*100:.0f}%" if c.get("backtest_winrate") is not None else "N/A"
     fund = "✅" if c.get("fundamental_pass") else "❌"
 
     lines.append(f"*{s['stock_id']} {s['name']}*  綜合 {s['signal_score']} 分")
@@ -250,7 +250,7 @@ def format_messages(
                 reason_parts.append("帶量上攻")
             if t.get("above_ma20") and t.get("above_ma60"):
                 reason_parts.append("多頭排列")
-            if c.get("backtest_winrate", 0) >= 0.6:
+            if (c.get("backtest_winrate") or 0) >= 0.6:
                 reason_parts.append(f"歷史勝率{c['backtest_winrate']*100:.0f}%")
             reason = "，".join(reason_parts) if reason_parts else "綜合分數領先"
             msg3.append(

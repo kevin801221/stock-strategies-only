@@ -7,6 +7,12 @@
     @apply bg-bg text-text;
     font-family: ui-sans-serif, system-ui, -apple-system, "Noto Sans TC", "PingFang TC", sans-serif;
   }
+  html { color-scheme: dark; }
+  body { font-variant-numeric: tabular-nums; }
+  button:disabled { cursor: not-allowed; opacity: 0.45; }
+  :focus-visible { outline: 2px solid #60a5fa; outline-offset: 4px; }
+  summary::-webkit-details-marker { display: none; }
+  progress { accent-color: #3b82f6; }
   ::selection { background: #2563eb55; }
 }
 
@@ -28,7 +34,7 @@
   }
   .input {
     @apply w-full bg-panel2 border border-line rounded-lg px-3 py-2 text-sm
-           focus:outline-none focus:border-accent;
+           focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20;
   }
   .label {
     @apply block text-xs uppercase tracking-wider text-muted mb-1;
@@ -43,4 +49,13 @@
   .badge-ai { @apply badge bg-purple-500/15 text-purple-300 border border-purple-500/30; }
   .badge-manual { @apply badge bg-blue-500/15 text-blue-300 border border-blue-500/30; }
   .badge-default { @apply badge bg-slate-500/15 text-slate-300 border border-slate-500/30; }
+}
+
+@layer components {
+  .eyebrow { @apply text-[11px] font-medium tracking-[0.18em] text-muted; }
+  .spinner { @apply h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent; }
+  .skip-link { @apply fixed left-4 top-4 z-50 -translate-y-24 rounded-lg bg-accent px-4 py-2 text-white focus:translate-y-0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

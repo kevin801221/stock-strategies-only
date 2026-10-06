@@ -2,120 +2,42 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api, Strategy, RunResult } from "@/lib/api";
-import { ActionBadge, SourceBadge } from "@/components/ActionBadge";
+import { api, errorMessage, Strategy } from "@/lib/api";
+import { PARAM_GROUPS } from "@/lib/strategy-fields";
+import { SourceBadge } from "@/components/ActionBadge";
+import { ErrorCard, Skeleton } from "@/components/Feedback";
+import RunControl from "@/components/RunControl";
+import SignalResults from "@/components/SignalResults";
+import StrategyForm from "@/components/StrategyForm";
+import { useRun } from "@/hooks/useRun";
 
 export default function StrategyDetail() {
-  const params = useParams<{ id: string }>();
-  const id = params.id;
+  const { id } = useParams<{ id: string }>();
   const [strategy, setStrategy] = useState<Strategy | null>(null);
-  const [running, setRunning] = useState(false);
-  const [run, setRun] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-
+  const [editing, setEditing] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [reload, setReload] = useState(0);
+  const run = useRun(id);
   useEffect(() => {
-    api.getStrategy(id).then(setStrategy).catch((e) => setError(e.message));
-  }, [id]);
-
-  async function doRun() {
-    setRunning(true);
-    setError(null);
-    try {
-      const r = await api.run(id);
-      setRun(r);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  if (!strategy && !error) return <div className="card text-muted">載入中…</div>;
-  if (error) return <div className="card border-err/40 text-err">錯誤：{error}</div>;
-  if (!strategy) return null;
-
-  return (
-    <div className="space-y-6">
-      <Link href="/strategies" className="text-sm text-muted hover:text-text">← 回策略庫</Link>
-
-      <div className="card">
-        <div className="flex items-center gap-2 mb-2">
-          <h1 className="text-2xl font-semibold">{strategy.name}</h1>
-          <SourceBadge source={strategy.source} />
-        </div>
-        <div className="text-xs text-muted font-mono mb-3">{strategy.id}</div>
-        {strategy.description && <p className="text-sm text-muted leading-relaxed">{strategy.description}</p>}
-        <button onClick={doRun} disabled={running} className="btn-primary mt-5">
-          {running ? "執行中…" : "▶ 用此策略跑一次 watchlist"}
-        </button>
-      </div>
-
-      <div className="card">
-        <h2 className="font-medium mb-4">策略參數</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 text-sm">
-          {Object.entries(strategy.params).map(([k, v]) => (
-            <div key={k}>
-              <div className="text-xs text-muted">{k}</div>
-              <div className="font-mono">{renderVal(v)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {run && (
-        <div className="card">
-          <h2 className="font-medium mb-3">執行結果</h2>
-          <div className="text-sm text-muted mb-3">{run.market.note}</div>
-          <div className="flex gap-2 mb-4">
-            <span className="badge-buy">BUY {run.summary.buy}</span>
-            <span className="badge-watch">WATCH {run.summary.watch}</span>
-            <span className="badge-skip">SKIP {run.summary.skip}</span>
-            {run.summary.error > 0 && <span className="badge-err">ERR {run.summary.error}</span>}
-          </div>
-          <div className="overflow-x-auto -mx-5">
-            <table className="w-full text-sm">
-              <thead className="text-xs text-muted">
-                <tr className="border-b border-line">
-                  <th className="text-left px-5 py-2">代號 / 名稱</th>
-                  <th className="text-left px-2 py-2">動作</th>
-                  <th className="text-right px-2 py-2">總分</th>
-                  <th className="text-right px-2 py-2">技術</th>
-                  <th className="text-right px-2 py-2">回測勝率</th>
-                  <th className="text-right px-5 py-2">參考價</th>
-                </tr>
-              </thead>
-              <tbody>
-                {run.results.map((r) => (
-                  <tr key={r.stock_id} className="border-b border-line/50 hover:bg-panel2/50">
-                    <td className="px-5 py-2">
-                      <div className="font-mono">{r.stock_id}</div>
-                      <div className="text-xs text-muted">{r.name}</div>
-                    </td>
-                    <td className="px-2 py-2"><ActionBadge action={r.action} /></td>
-                    <td className="px-2 py-2 text-right font-mono">{r.signal_score ?? "—"}</td>
-                    <td className="px-2 py-2 text-right font-mono">{r.components?.tech_score ?? "—"}</td>
-                    <td className="px-2 py-2 text-right font-mono">
-                      {r.components?.backtest_winrate != null
-                        ? `${(r.components.backtest_winrate * 100).toFixed(0)}%`
-                        : "—"}
-                    </td>
-                    <td className="px-5 py-2 text-right font-mono">{r.entry_price ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function renderVal(v: any) {
-  if (typeof v === "boolean") return v ? "✓" : "✗";
-  if (typeof v === "number") {
-    if (v > 0 && v < 1) return v.toFixed(3);
-    return String(v);
-  }
-  return String(v);
+    const controller = new AbortController();
+    setStrategy(null); setError(null); setEditing(false); setSaved(false);
+    api.getStrategy(id, controller.signal).then(setStrategy).catch(err => { if (!controller.signal.aborted) setError(errorMessage(err)); });
+    return () => controller.abort();
+  }, [id, reload]);
+  return <div className="space-y-6">
+    <Link href="/strategies" className="text-sm text-muted hover:text-text">← 回策略庫</Link>
+    {error && <ErrorCard message={error} retry={() => setReload(value => value + 1)} />}
+    {!strategy && !error && <Skeleton />}
+    {strategy && <>
+      <section className="card"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="mb-3"><SourceBadge source={strategy.source} /></div><h1 className="text-2xl font-semibold">{strategy.name}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-muted">{strategy.description}</p></div><button className="btn-ghost" disabled={run.running} onClick={() => { setEditing(value => !value); setSaved(false); }}>{editing ? "返回策略詳情" : "編輯參數"}</button></div>
+        {saved && <p role="status" className="mt-3 text-sm text-buy">策略已更新，下次選股會使用新的參數。</p>}
+        {!editing && <div className="mt-5 border-t border-line pt-5"><RunControl run={run} /></div>}
+      </section>
+      {editing ? <StrategyForm key={strategy.updated_at} initial={strategy} saveLabel="儲存變更" onSaved={value => { setStrategy(value); setEditing(false); setSaved(true); }} /> : <>
+        {run.result && <SignalResults run={run.result} />}
+        <section className="grid gap-4 md:grid-cols-2">{PARAM_GROUPS.map(group => <div className="card" key={group.title}><h2 className="mb-4 text-sm font-medium">{group.title}</h2><dl className="space-y-3">{group.fields.map(field => { const value = strategy.params[field.key]; return <div key={field.key} className="flex justify-between gap-4 text-sm"><dt className="text-muted">{field.label}</dt><dd className="shrink-0 font-mono">{typeof value === "boolean" ? value ? "啟用" : "關閉" : typeof value === "number" ? field.percent ? `${Number((value * 100).toFixed(2))}%` : value : "—"}</dd></div>; })}</dl></div>)}</section>
+      </>}
+    </>}
+  </div>;
 }

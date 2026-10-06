@@ -52,30 +52,30 @@
 
 接下來會**持續更新**，重點方向：
 
-- 🎨 **全新 UI / UX** — 不再只有 Telegram 通知，將推出互動式網頁 Dashboard（今日訊號表、個股卡片、Performance 回測曲線）
 - 🤖 **Multi-Agent 互動介面** — 結合 CopilotKit + LangGraph，讓你直接「跟 AI 對話」管理觀察清單、重跑選股、做 what-if 回測
+- 📈 **Performance 歷史累積曲線** — 視覺化策略在台股歷史大盤各週期的績效走勢
 
 敬請期待，也歡迎繼續提 issue 與 PR 一起把它做得更好！
 
 ---
 
-## 🆕 V3.3 — 策略庫 + AI 生策略 Web UI
+## 🆕 V3.3 — 策略庫 + AI 生策略 Web UI（含 2026-09 操作全面優化）
 
-過去只有 Telegram 通知，這版開始有了**完整的互動式網頁介面**。`main.py` 的單一寫死策略也重構成「**參數化策略**」，每個策略 = `strategies/<id>.json` 一份檔案，可在網頁上建立、調參、執行。
+過去只有 Telegram 通知，現在有了**完整的互動式網頁介面**。`main.py` 的單一寫死策略也重構成「**參數化策略**」，每個策略 = `strategies/<id>.json` 一份檔案，可在網頁上建立、調參、執行。
 
 新增兩個服務：
 
-- **FastAPI 後端** (`api/`)：策略 CRUD、Gemini 自動生策略、用任一策略執行 watchlist
-- **Next.js 前端** (`web/`)：策略庫列表、手動建立表單、AI 生策略（自然語言 → JSON）、Dashboard
+- **FastAPI 後端** (`api/`)：策略 CRUD、Gemini 自動生策略、用任一策略執行 watchlist，提供非同步選股任務
+- **Next.js 前端** (`web/`)：即時選股儀表板、逐檔進度條、策略庫列表、手動建立表單、AI 自然語言生策略
 
 > 介面預覽截圖在最下方 → [🖼️ Web UI 介面預覽](#-web-ui-介面預覽)
 
 ### 啟動方式（兩個 terminal）
 
 ```bash
-# Terminal 1 — 後端
+# Terminal 1 — 後端（專案根目錄）
 uv sync
-uv run uvicorn api.main:app --reload --port 8000
+uv run uvicorn api.main:app --reload --reload-include '*.py' --port 8000
 
 # Terminal 2 — 前端
 cd web && npm install && npm run dev
@@ -84,6 +84,14 @@ cd web && npm install && npm run dev
 開 http://localhost:3000 即可。需新增環境變數 `GEMINI_API_KEY`（AI 生策略用，可選）。詳見 [`web/README.md`](web/README.md) 與 [`strategies/SCHEMA.md`](strategies/SCHEMA.md)。
 
 原本的 `main.py` 走排程跑 default 策略，跟新 UI 完全相容。
+
+#### ⚡ 2026-09 操作與架構改善重點
+- **非同步短輪詢選股**：改採背景任務架構（`/api/runs` 端點），徹底解決 Next.js 代理長請求連線逾時（Socket Hang up）問題。
+- **逐檔即時進度與取消**：畫面即時顯示當前分析個股（如 `7 / 20 正在分析 2330`）與進度條，支援隨時協同取消並保留已完成結果。
+- **全新選股結果檢視**：支援 `BUY` / `WATCH` / `SKIP` / `ERROR` 標籤點擊即時篩選、股票代號/名稱搜尋、多維排序與 CSV 匯出。
+- **個股交易規劃展開**：點擊卡片直接展開參考進場價、停損價、目標價、風報比、建議部位、技術分與量價形態。
+- **安全原子寫入（Atomic Write）**：策略 JSON 儲存改採臨時檔 + `fsync` + 執行緒鎖，杜絕存檔中斷毀損；加入嚴格輸入防呆與 100% 權重合計檢查。
+- **評分缺陷修復**：修正回測 0% 勝率被誤判為 50% 的問題；156 項 Python 測試與 11 項前端測試全綠。
 
 ---
 
@@ -646,25 +654,40 @@ Private repo 每月免費 2000 分鐘，這個 workflow 每次約 2 分鐘，每
 
 ## 🖼️ Web UI 介面預覽
 
-**Dashboard — 一鍵執行今日選股**
-挑一個策略、按下執行，即時看到 watchlist 每檔的綜合分與 BUY / WATCH / SKIP 結果，並標出市場氛圍。
+**1. Dashboard — 一鍵執行今日選股與即時觀察池**
+自動讀取 Google Sheet 觀察池股票，選定策略後一鍵啟動選股。
 
-![Dashboard](assets/dashboard.jpg)
+![Dashboard 儀表板](assets/ui-dashboard-live.png)
 
-**策略庫 — 所有策略集中管理**
-每個策略一張卡片，列出 EPS / ROE 門檻、總分門檻、持有日等關鍵參數，可直接「跑一次」或新增。
+**2. 選股執行中 — 逐檔即時進度條與取消機制**
+顯示當前正在分析的股票代號與處理進度（如 `7 / 20 正在分析 2330 台積電`），支援隨時取消並保留既有結果。
 
-![策略庫](assets/strategy-library.jpg)
+![選股進度條](assets/ui-screening-progress.png)
 
-**手動建立策略 — 全參數化表單**
-基本面門檻、回測與訊號、風險（停利 / 停損）、評分加權、技術訊號開關全部可調，所有欄位都有預設值。
+**3. 選股結果 — 分類篩選、搜尋與 CSV 匯出**
+即時統計可進場（BUY）、持續觀察（WATCH）、未符合（SKIP）與資料異常（ERROR）數量，支援點擊分類標籤篩選、關鍵字搜尋與一鍵匯出 CSV。
 
-![手動建立策略](assets/strategy-create.jpg)
+![選股結果總覽](assets/ui-screening-results.png)
 
-**AI 生策略 — 用一句話生出參數**
-輸入「我想做短線動能，5–10 天持有，停損 -5%、停利 +15%」這類自然語言，Gemini 自動生出對應策略 JSON，可再微調後存進策略庫。
+**4. 個股詳情 — 交易規劃與量化指標展開**
+點擊個股卡片即可展開交易參考（進場價、停損價、目標價、風報比、建議部位）、多空標籤、5日/20日漲跌、量比與風險提示。
 
-![AI 生策略](assets/strategy-ai.jpg)
+![個股交易參考展開](assets/ui-stock-detail-expanded.png)
+
+**5. 策略表單 — 即時防呆與 100% 權重驗證**
+建立或編輯策略時，以百分比直覺呈現。系統即時驗證基本面、技術面、回測三項權重合計是否為 100%，未符合時鎖定儲存並提示。
+
+![策略表單防呆驗證](assets/ui-strategy-form-validation.png)
+
+**6. AI 生策略 — 用一句話生成量化策略**
+輸入「我想做短線動能，5–10 天持有，停損 -5%、停利 +15%」等自然語言，Gemini 自動推導所有門檻與指標參數並填入表單。
+
+![AI 策略生成實機](assets/ui-ai-generator.png)
+
+**7. 行動端適配 — 手機瀏覽器完整響應**
+在手機螢幕尺寸（RWD）下提供流暢的卡片式操作、折疊展開與導航體驗。
+
+![手機版響應式展示](assets/ui-mobile-responsive.png)
 
 ---
 
@@ -673,11 +696,14 @@ Private repo 每月免費 2000 分鐘，這個 workflow 每次約 2 分鐘，每
 **✅ 最新完成**
 
 - [x] 🌙 **夜盤盤前快報** — 早上 08:00 讀台指期夜盤，預判今日開盤方向，疊加昨日訊號順風/逆風
+- [x] 🎨 **互動式網頁 Dashboard** — 今日訊號表、個股詳情卡、即時進度條與 CSV 匯出（Next.js + Tailwind）
+- [x] 🚀 **架構強健性優化** — 非同步背景選股、協同取消、原子寫入、100% 權重驗證、156 項測試全綠與 GitHub Actions CI
+- [x] 🤖 **AI 自然語言策略助手** — 串接 Gemini 2.5 Flash 自動生成量化策略參數
 
-**🚧 進行中（下一個大版本）**
+**🚧 進行中**
 
-- [ ] 🎨 **互動式網頁 Dashboard** — 今日訊號表、個股詳情卡、Performance 回測曲線（Next.js + Tailwind）
-- [ ] 🤖 **Multi-Agent 對話介面** — CopilotKit + LangGraph，用對話管理 watchlist、重跑選股、what-if 回測
+- [ ] 🤖 **Multi-Agent 對話介面** — 結合 CopilotKit + LangGraph，用對話管理 watchlist、重跑選股、what-if 回測
+- [ ] 📈 **Performance 回測歷史累積曲線視覺化**
 
 **📋 規劃中**
 

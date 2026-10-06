@@ -23,9 +23,10 @@ import time
 import traceback
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 try:
     from dotenv import load_dotenv
@@ -35,13 +36,19 @@ except ImportError:
     pass
 
 from stock_strategies import loader
-from stock_strategies.evaluate import evaluate
-from stock_strategies.market import apply_market_filter, get_market_state
+from stock_strategies.market import get_market_state
 from stock_strategies.sheet import read_watchlist
 
 from api.services.ai_generator import generate_strategy_with_ai
+from api.services.runs import RunBusy, RunManager
 
-app = FastAPI(title="Stock Strategies API", version="1.0.0")
+app = FastAPI(title="Stock Strategies API", version="1.1.0")
+runs = RunManager()
+
+
+@app.exception_handler(loader.StrategyError)
+async def strategy_error(_request: Request, exc: loader.StrategyError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 # CORS：dev 期間給 localhost:3000 (Next.js)
 _origins_env = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
@@ -66,13 +73,20 @@ class StrategyIn(BaseModel):
 
 
 class AIGenerateIn(BaseModel):
-    prompt: str = Field(..., description="使用者用自然語言描述想要的策略風格")
-    name: Optional[str] = None
+    prompt: str = Field(..., min_length=1, max_length=8000, description="使用者用自然語言描述想要的策略風格")
+    name: Optional[str] = Field(None, max_length=120)
+
+    @field_validator("prompt")
+    @classmethod
+    def nonempty_prompt(cls, value):
+        if not value.strip():
+            raise ValueError("請輸入策略描述")
+        return value.strip()
 
 
 class RunIn(BaseModel):
-    strategy_id: str
-    limit: Optional[int] = Field(None, description="只跑前 N 檔（debug 用）")
+    strategy_id: str = Field(..., pattern=r"^[a-zA-Z0-9_-]{1,100}$")
+    limit: Optional[int] = Field(None, ge=1, le=1000, strict=True, description="只跑前 N 檔")
 
 
 # ---------- Routes ----------
@@ -144,54 +158,45 @@ def watchlist():
         return {"items": [], "error": str(e)}
 
 
-@app.post("/api/run")
-def run(payload: RunIn):
+def _load_run_strategy(payload: RunIn):
     strategy = loader.get_strategy(payload.strategy_id)
     if not strategy:
         raise HTTPException(404, f"找不到策略 {payload.strategy_id}")
+    return strategy
 
+
+@app.post("/api/run")
+def run(payload: RunIn):
+    """Compatibility endpoint; browser clients use /api/runs for short requests."""
+    strategy = _load_run_strategy(payload)
     try:
-        wl = read_watchlist()
-    except Exception as e:
-        raise HTTPException(500, f"讀取 watchlist 失敗：{e}")
+        return runs.run_sync(strategy, payload.limit)
+    except RunBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"選股失敗：{exc}") from exc
 
-    if payload.limit:
-        wl = wl[: payload.limit]
 
-    params = strategy["params"]
-    market_filter_on = params.get("market_filter_enabled", True)
-    if market_filter_on:
-        market_state = get_market_state(int(params.get("market_filter_ma_period", 20)))
-    else:
-        market_state = {"bullish": True, "note": "已關閉大盤濾鏡"}
+@app.post("/api/runs", status_code=202)
+def start_run(payload: RunIn):
+    strategy = _load_run_strategy(payload)
+    try:
+        return runs.start(strategy, payload.limit)
+    except RunBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
 
-    results = []
-    for row in wl:
-        sid = str(row["stock_id"])
-        name = row.get("name", "")
-        r = evaluate(sid, name, strategy=strategy)
-        if r:
-            results.append(r)
-        time.sleep(0.4)
 
-    if market_filter_on:
-        downgraded = apply_market_filter(results, market_state)
-    else:
-        downgraded = 0
+@app.get("/api/runs/{job_id}")
+def get_run(job_id: str):
+    job = runs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "執行紀錄不存在或已過期，請重新執行")
+    return job
 
-    order = {"BUY": 0, "WATCH": 1, "SKIP": 2, "ERROR": 3}
-    results.sort(key=lambda x: (order.get(x.get("action"), 4), -x.get("signal_score", 0)))
 
-    return {
-        "strategy": {"id": strategy["id"], "name": strategy["name"]},
-        "market": market_state,
-        "downgraded": downgraded,
-        "summary": {
-            "total": len(results),
-            "buy": sum(1 for r in results if r.get("action") == "BUY"),
-            "watch": sum(1 for r in results if r.get("action") == "WATCH"),
-            "skip": sum(1 for r in results if r.get("action") == "SKIP"),
-            "error": sum(1 for r in results if r.get("action") == "ERROR"),
-        },
-        "results": results,
-    }
+@app.delete("/api/runs/{job_id}")
+def cancel_run(job_id: str):
+    job = runs.cancel(job_id)
+    if job is None:
+        raise HTTPException(404, "執行紀錄不存在或已過期")
+    return job

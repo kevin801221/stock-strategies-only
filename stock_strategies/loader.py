@@ -9,8 +9,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
+import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +64,25 @@ class StrategyError(ValueError):
     """策略驗證失敗"""
 
 
+_WRITE_LOCK = threading.Lock()
+_BOUNDS = {
+    "backtest_years": (1, 10), "hold_days": (1, 120),
+    "target_return": (0.01, 0.5), "stop_loss": (0.01, 0.5),
+    "min_total_score_for_buy": (0, 100), "min_tech_score_for_buy": (0, 100),
+    "min_tech_score_for_signal": (0, 100), "market_filter_ma_period": (5, 120),
+    "weight_fundamental": (0, 1), "weight_technical": (0, 1), "weight_backtest": (0, 1),
+}
+
+
+def _strategy_path(sid: str) -> Path:
+    if not isinstance(sid, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", sid):
+        raise StrategyError("策略 ID 只能包含英數字、底線與連字號，長度 1–100")
+    path = STRATEGY_DIR / f"{sid}.json"
+    if path.is_symlink():
+        raise StrategyError("策略檔不可為符號連結")
+    return path
+
+
 def _slugify(text: str) -> str:
     """產生策略 ID。保留 ASCII 英數字與底線；CJK 中文字會被丟掉，
     若清掉後變空字串就回 uuid。"""
@@ -106,16 +128,18 @@ def validate_strategy(data: dict) -> dict:
     if not isinstance(data, dict):
         raise StrategyError("策略必須是 JSON 物件")
 
-    name = (data.get("name") or "").strip()
-    if not name:
-        raise StrategyError("name 不能空白")
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 120:
+        raise StrategyError("策略名稱必須為 1–120 字")
+    name = name.strip()
 
-    sid = data.get("id") or _slugify(name) or uuid.uuid4().hex[:8]
+    sid = data.get("id") if data.get("id") is not None else _slugify(name)[:80]
+    _strategy_path(sid)
     source = data.get("source") or "manual"
     if source not in ("default", "manual", "ai"):
         source = "manual"
 
-    raw_params = data.get("params") or {}
+    raw_params = data.get("params", {})
     if not isinstance(raw_params, dict):
         raise StrategyError("params 必須是物件")
 
@@ -123,30 +147,42 @@ def validate_strategy(data: dict) -> dict:
     for key, default_val in _PARAM_DEFAULTS.items():
         if key in raw_params and raw_params[key] is not None:
             v = raw_params[key]
-            # 型別檢查（簡單版）
             if isinstance(default_val, bool):
-                v = bool(v)
-            elif isinstance(default_val, int) and not isinstance(default_val, bool):
-                v = int(v)
-            elif isinstance(default_val, float):
-                v = float(v)
+                if not isinstance(v, bool):
+                    raise StrategyError(f"{key} 必須是布林值")
+            else:
+                if isinstance(v, bool) or not isinstance(v, (int, float)):
+                    raise StrategyError(f"{key} 必須是有限數值")
+                try:
+                    finite = math.isfinite(v)
+                except OverflowError:
+                    finite = False
+                if not finite:
+                    raise StrategyError(f"{key} 必須是有限數值")
+                if isinstance(default_val, int):
+                    if v != int(v):
+                        raise StrategyError(f"{key} 必須是整數")
+                    v = int(v)
+                else:
+                    v = float(v)
+                if key in _BOUNDS:
+                    low, high = _BOUNDS[key]
+                    if not low <= v <= high:
+                        raise StrategyError(f"{key} 必須介於 {low} 與 {high}")
             clean_params[key] = v
         else:
             clean_params[key] = default_val
 
-    # 範圍夾擠
-    clean_params["target_return"] = max(0.01, min(0.5, clean_params["target_return"]))
-    clean_params["stop_loss"] = max(0.01, min(0.5, clean_params["stop_loss"]))
-    clean_params["min_total_score_for_buy"] = max(0, min(100, clean_params["min_total_score_for_buy"]))
-    clean_params["min_tech_score_for_buy"] = max(0, min(100, clean_params["min_tech_score_for_buy"]))
-    clean_params["min_tech_score_for_signal"] = max(0, min(100, clean_params["min_tech_score_for_signal"]))
-    clean_params["backtest_years"] = max(1, min(10, clean_params["backtest_years"]))
-    clean_params["hold_days"] = max(1, min(120, clean_params["hold_days"]))
+    if sum(clean_params[k] for k in ("weight_fundamental", "weight_technical", "weight_backtest")) <= 0:
+        raise StrategyError("評分權重總和必須大於 0")
+    description = data.get("description") or ""
+    if not isinstance(description, str) or len(description) > 4000:
+        raise StrategyError("策略說明必須是文字且不超過 4000 字")
 
     return {
         "id": sid,
         "name": name,
-        "description": (data.get("description") or "").strip(),
+        "description": description.strip(),
         "source": source,
         "created_at": data.get("created_at") or _now_iso(),
         "updated_at": _now_iso(),
@@ -159,36 +195,55 @@ def list_strategies() -> list[dict]:
     out = []
     for p in sorted(STRATEGY_DIR.glob("*.json")):
         try:
-            with open(p, "r", encoding="utf-8") as f:
-                out.append(json.load(f))
+            strategy = get_strategy(p.stem)
+            if strategy is not None:
+                out.append(strategy)
         except Exception as e:
             out.append({"id": p.stem, "name": p.stem, "error": str(e)})
     return out
 
 
 def get_strategy(sid: str) -> Optional[dict]:
-    path = STRATEGY_DIR / f"{sid}.json"
+    path = _strategy_path(sid)
     if not path.exists():
         return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        clean = validate_strategy(data)
+        clean["id"] = sid
+        clean["updated_at"] = data.get("updated_at") or clean["updated_at"]
+        return clean
+    except (ValueError, TypeError) as exc:
+        raise StrategyError(f"策略 {sid} 無法讀取：{exc}") from exc
 
 
 def save_strategy(data: dict) -> dict:
     """新增或覆寫一份策略。回傳乾淨版本。"""
     _ensure_dir()
     clean = validate_strategy(data)
-    path = STRATEGY_DIR / f"{clean['id']}.json"
-    if not path.exists():
-        # 新檔 → created_at 沿用 validate 的
-        pass
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(clean, f, ensure_ascii=False, indent=2)
+    with _WRITE_LOCK:
+        path = _strategy_path(clean["id"])
+        if data.get("id") is None and path.exists():
+            clean["id"] = f"{clean['id']}-{uuid.uuid4().hex[:8]}"
+            path = _strategy_path(clean["id"])
+        if path.exists():
+            clean["created_at"] = get_strategy(clean["id"])["created_at"]
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=STRATEGY_DIR, suffix=".tmp", delete=False) as f:
+                temporary = Path(f.name)
+                json.dump(clean, f, ensure_ascii=False, indent=2, allow_nan=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return clean
 
 
 def delete_strategy(sid: str) -> bool:
-    path = STRATEGY_DIR / f"{sid}.json"
+    path = _strategy_path(sid)
     if path.exists():
         path.unlink()
         return True
